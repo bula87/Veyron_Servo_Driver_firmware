@@ -105,6 +105,7 @@ U16 EepromServoRunTimes = 0;
 U8 DIStateBps;        
 U8 DIStateBpsApp;      
 U2 On1Off0LineFlag = 0;
+U2 binaryModeStarted = 0;
 
 U2 USbRxFLAG   = 0;
 U2 UARt1RxFLAG = 0;
@@ -474,7 +475,7 @@ void ParseRxData(void)
 
   if(((UARt1RxFLAG == 1)||(USbRxFLAG == 1)||(UARt2RxFLAG == 1))&&(UartRxNotFinishFlig == 0))
   { 
-
+    
     {
       if((UsbTemp > 0) && (UsbTempBuffer[UsbTemp-1] == 13))
       { 
@@ -482,375 +483,442 @@ void ParseRxData(void)
 
         while(UsbTemp > i)
         {
-          switch(UsbTempBuffer[i]) 
+/* 
+* 0x80 - 0x98: this is a range after "printable" ASCII code
+* we will use it for binary mode because in "terminal mode" we will use characters up to number 126 on ASCII table 
+* our 0x80 (ASCII 128) and 0x98 (ASCII 128+24) will be enought to determinate servo port number
+*/
+          if(UsbTempBuffer[i] >= 0x80 && UsbTempBuffer[i] <= 0xA2) // Binary mode
           {
-
-            case 'X'://
-              DisplayPages(0x440);//
-              DisplayPagesEnd(0x10);//
-              i = ++iTemp;
-            break;
-            case 'E'://
-              iTemp = i;     
-            
-              if(UsbTempBuffer[++iTemp] == 'W' && iTemp < UsbTemp)//
-              {//
-                ++iTemp;
-                if((UsbTempBuffer[iTemp]=='L'||UsbTempBuffer[iTemp]=='N') && iTemp < UsbTemp)//
-                {//
-                  if( UsbTempBuffer[iTemp]=='L' )
-                    LoopExecutionFlag = 1;//
-                  else
-                    LoopExecutionFlag = 0;// 
-                  if(UsbTempBuffer[++iTemp] != ',')//
-                    return;    
-                  while(( UsbTempBuffer[++iTemp] != ' ')&&(iTemp < UsbTemp)&&(UsbTempBuffer[iTemp]>='0')&&(UsbTempBuffer[iTemp]<='9'))
-                  {
-                    DataTemp[DataTempCounter] = UsbTempBuffer[iTemp] ;//
-                    DataTempCounter++;
-                  }
-                  ActionGroupNumber = (U16)JudgeNumericalRange(my_atoi(DataTemp,DataTempCounter),1024,1);//
-                  DataTempCounter = 0;
-                  EepromFormatInt(); //
-                  EepromWriteStatusJudge(LoopExecutionFlagAddr, LoopExecutionFlag);// 
-                  EepromWriteStatusJudge(ActionGroupNumberAddr, ActionGroupNumber);// 
-                  Status = EEPROM.read(ActionGroupNumberAddr, &ActionGroupNumber);
-                  EepromStatusInform(TxTypeTemp1);
-                }
-                else
+            iTemp = i;
+            U16 tmp2bytes = 0;
+            if(binaryModeStarted == 0) // read servo pin number (#) and servo move angle (P) 
+            { 
+              if ( (UsbTempBuffer[iTemp]^0x80)+1 > 0 && (UsbTempBuffer[iTemp]^0x80)+1 < 25)
+              {
+                ArrayNumberPWM01 = (UsbTempBuffer[iTemp]^0x80)+1;
+                binaryModeStarted = 1;
+                
+                for(j=0;j<2;j++)
                 {
-                  for( U8 i = 0;i < 50;i++ )
-                  {//
-                    while((iTemp < UsbTemp)&&(UsbTempBuffer[iTemp]>='0')&&(UsbTempBuffer[iTemp]<='9'))//( UsbTempBuffer[iTemp] != ',')&&
-                    {
-                      DataTemp[DataTempCounter] = UsbTempBuffer[iTemp] ;//UsbTempBuffer[iTemp] - '0';
-                      DataTempCounter++;
-                      ++iTemp;
-                    }
-                    if(i == 0)//
-                    {
-                      ActionGroupNumberNow = (U16)JudgeNumericalRange(my_atoi(DataTemp,DataTempCounter),1024,1);
-                      ++iTemp;
-                      k = ((ActionGroupNumberNow - 1)*50 + PwmDataFirstCommonalityAddr + i);//
-                      EepromWriteStatusJudge(((ActionGroupNumberNow - 1)*50 + PwmDataFirstCommonalityAddr + i),ActionGroupNumberNow);//
-                    }
-                    else if(i>=1 && i<= 24)//
-                    {
-                      ServoPwm[i-1] = (U16)JudgeNumericalRange(my_atoi(DataTemp,DataTempCounter),2500,500);
-                      ++iTemp;
-                      EepromWriteStatusJudge(((ActionGroupNumberNow - 1)*50 + PwmDataFirstCommonalityAddr+i),ServoPwm[i-1]);//
-                    }
-                    else if(i>=25 && i<= 48)//
-                    {
-                      ServoSpeed[i-25] = (U16)JudgeNumericalRange(my_atoi(DataTemp,DataTempCounter),5000,1);
-                      ++iTemp;
-                      EepromWriteStatusJudge(((ActionGroupNumberNow - 1)*50 + PwmDataFirstCommonalityAddr+i),ServoSpeed[i-25]);//
-                    }
-                    else if(i == 49)
-                    {
-                      ExecutionTime = (U16)JudgeNumericalRange(my_atoi(DataTemp,DataTempCounter),30000,50);
-                      ++iTemp;
-                      EepromWriteStatusJudge(((ActionGroupNumberNow - 1)*50 + PwmDataFirstCommonalityAddr+i),ExecutionTime);//
-                    }
-                    else
-                    {
-                      ++iTemp;
-                    }
-                    DataTempCounter = 0;
-                  }
-                  EepromStatusInform(TxTypeTemp1);//
+                  ++iTemp;
+                  tmp2bytes <<= 8;
+                  tmp2bytes |= UsbTempBuffer[iTemp];
                 }
-              }             
-              else if(UsbTempBuffer[iTemp] == 'R' && iTemp < UsbTemp)//
-              { 
-                Status = EEPROM.read(ActionGroupNumberAddr,&Data);
-                ServoRxActionGroupNumber = Data;
-                for(U16 jj = 1;jj <=  ServoRxActionGroupNumber;jj++)//
-                {
-                  for(U8 kk = 0;kk < 50;kk++)//
-                  {
-                    RxEepromAddr = ((jj - 1) * 50) + 10 + kk;//
-                    Status = EEPROM.read(RxEepromAddr,&ServoRxRegister[kk]);
-                  }
-                  UartTxData(TxTypeTemp1,7);//
-                }
+                PWMspeed[ArrayNumberPWM01 - 1] = JudgeNumericalRange(tmp2bytes,2500,500);
+                PWMspeed[ArrayNumberPWM01 - 1] = PWMspeed[ArrayNumberPWM01 - 1] - 500;
               }
-              i = ++iTemp;
-            break;
+            }
+            ++iTemp;
+            switch(UsbTempBuffer[iTemp])
+            {
+              case 0xA0: // read optional speed command for servo (S)
+                for(j=0;j<2;j++)
+                {
+                  ++iTemp;
+                  tmp2bytes <<= 8;
+                  tmp2bytes |= UsbTempBuffer[iTemp];
+                }
+                PWM01[ArrayNumberPWM01 - 1].SpeedFlag = 1;
+                PWM01[ArrayNumberPWM01 - 1].speed = JudgeNumericalRange(tmp2bytes,5000,1);//
+                break;
+              case 0xA1: // read group move time for servos (T)
+                for(j=0;j<2;j++)
+                {
+                  ++iTemp;
+                  tmp2bytes <<= 8;
+                  tmp2bytes |= UsbTempBuffer[iTemp];
+                }
+                PWM01[ArrayNumberPWM01 - 1].TimerFlag = 1;
+                PWM01[ArrayNumberPWM01 - 1].timer = JudgeNumericalRange(tmp2bytes,65535,1);//
+                for(j = 0;j<24;j++)
+                {
+                  PWM01[j].timer     = PWM01[ArrayNumberPWM01 - 1].timer;
+                  PWM01[j].TimerFlag = PWM01[ArrayNumberPWM01 - 1].TimerFlag;
+                  PWM01[j].SpeedFlag = 0;
+                }
+                break;
+              case 0xA2: // Cancel all commands (TODO)
+                break;
+              default:
+                binaryModeStarted = 0;
+                break;
+            }
+            i = iTemp;
+          }
+          else // Terminal mode
+          {
+            binaryModeStarted = 0;
+            switch(UsbTempBuffer[i]) 
+            {
 
-            case 'V':
-               iTemp = i;
-               if(UsbTempBuffer[++iTemp] == 'E' && UsbTempBuffer[++iTemp] == 'R')
-               {
-                 UartTxData(TxTypeTemp1,1);//
-               }
-               else
-               {
-                 return;
-               }
-               i = iTemp;
-            break;
-            case '#':
-               iTemp = i;
-               while(( UsbTempBuffer[++iTemp] != ' ')&&(iTemp < UsbTemp)&&(UsbTempBuffer[iTemp]>='0')&&(UsbTempBuffer[iTemp]<='9'))
-               {
-                 DataTemp[DataTempCounter] = UsbTempBuffer[iTemp] ;
-                 DataTempCounter++;
-               }
-               ArrayNumberPWM01 = my_atoi(DataTemp,DataTempCounter);
-               ArrayNumberPWM01 = ArrayNumberPWM01 + 1;
-               if(( ArrayNumberPWM01 > 24)||( ArrayNumberPWM01 < 1 ))
-               {
-                 DataTempCounter = 0;
-                 i = iTemp;
-                 return;
-               }  
-               DataTempCounter = 0;
-               i = iTemp;
-            break;
-            case 'P':
-               iTemp = i;
+              case 'X'://
+                DisplayPages(0x440);//
+                DisplayPagesEnd(0x10);//
+                i = ++iTemp;
+              break;
+              case 'E'://
+                iTemp = i;     
+              
+                if(UsbTempBuffer[++iTemp] == 'W' && iTemp < UsbTemp)//
+                {//
+                  ++iTemp;
+                  if((UsbTempBuffer[iTemp]=='L'||UsbTempBuffer[iTemp]=='N') && iTemp < UsbTemp)//
+                  {//
+                    if( UsbTempBuffer[iTemp]=='L' )
+                      LoopExecutionFlag = 1;//
+                    else
+                      LoopExecutionFlag = 0;// 
+                    if(UsbTempBuffer[++iTemp] != ',')//
+                      return;    
+                    while(( UsbTempBuffer[++iTemp] != ' ')&&(iTemp < UsbTemp)&&(UsbTempBuffer[iTemp]>='0')&&(UsbTempBuffer[iTemp]<='9'))
+                    {
+                      DataTemp[DataTempCounter] = UsbTempBuffer[iTemp] ;//
+                      DataTempCounter++;
+                    }
+                    ActionGroupNumber = (U16)JudgeNumericalRange(my_atoi(DataTemp,DataTempCounter),1024,1);//
+                    DataTempCounter = 0;
+                    EepromFormatInt(); //
+                    EepromWriteStatusJudge(LoopExecutionFlagAddr, LoopExecutionFlag);// 
+                    EepromWriteStatusJudge(ActionGroupNumberAddr, ActionGroupNumber);// 
+                    Status = EEPROM.read(ActionGroupNumberAddr, &ActionGroupNumber);
+                    EepromStatusInform(TxTypeTemp1);
+                  }
+                  else
+                  {
+                    for( U8 i = 0;i < 50;i++ )
+                    {//
+                      while((iTemp < UsbTemp)&&(UsbTempBuffer[iTemp]>='0')&&(UsbTempBuffer[iTemp]<='9'))//( UsbTempBuffer[iTemp] != ',')&&
+                      {
+                        DataTemp[DataTempCounter] = UsbTempBuffer[iTemp] ;//UsbTempBuffer[iTemp] - '0';
+                        DataTempCounter++;
+                        ++iTemp;
+                      }
+                      if(i == 0)//
+                      {
+                        ActionGroupNumberNow = (U16)JudgeNumericalRange(my_atoi(DataTemp,DataTempCounter),1024,1);
+                        ++iTemp;
+                        k = ((ActionGroupNumberNow - 1)*50 + PwmDataFirstCommonalityAddr + i);//
+                        EepromWriteStatusJudge(((ActionGroupNumberNow - 1)*50 + PwmDataFirstCommonalityAddr + i),ActionGroupNumberNow);//
+                      }
+                      else if(i>=1 && i<= 24)//
+                      {
+                        ServoPwm[i-1] = (U16)JudgeNumericalRange(my_atoi(DataTemp,DataTempCounter),2500,500);
+                        ++iTemp;
+                        EepromWriteStatusJudge(((ActionGroupNumberNow - 1)*50 + PwmDataFirstCommonalityAddr+i),ServoPwm[i-1]);//
+                      }
+                      else if(i>=25 && i<= 48)//
+                      {
+                        ServoSpeed[i-25] = (U16)JudgeNumericalRange(my_atoi(DataTemp,DataTempCounter),5000,1);
+                        ++iTemp;
+                        EepromWriteStatusJudge(((ActionGroupNumberNow - 1)*50 + PwmDataFirstCommonalityAddr+i),ServoSpeed[i-25]);//
+                      }
+                      else if(i == 49)
+                      {
+                        ExecutionTime = (U16)JudgeNumericalRange(my_atoi(DataTemp,DataTempCounter),30000,50);
+                        ++iTemp;
+                        EepromWriteStatusJudge(((ActionGroupNumberNow - 1)*50 + PwmDataFirstCommonalityAddr+i),ExecutionTime);//
+                      }
+                      else
+                      {
+                        ++iTemp;
+                      }
+                      DataTempCounter = 0;
+                    }
+                    EepromStatusInform(TxTypeTemp1);//
+                  }
+                }             
+                else if(UsbTempBuffer[iTemp] == 'R' && iTemp < UsbTemp)//
+                { 
+                  Status = EEPROM.read(ActionGroupNumberAddr,&Data);
+                  ServoRxActionGroupNumber = Data;
+                  for(U16 jj = 1;jj <=  ServoRxActionGroupNumber;jj++)//
+                  {
+                    for(U8 kk = 0;kk < 50;kk++)//
+                    {
+                      RxEepromAddr = ((jj - 1) * 50) + 10 + kk;//
+                      Status = EEPROM.read(RxEepromAddr,&ServoRxRegister[kk]);
+                    }
+                    UartTxData(TxTypeTemp1,7);//
+                  }
+                }
+                i = ++iTemp;
+              break;
 
-               PWM01[ArrayNumberPWM01 - 1].DigitalOutFlag = 0;//
-               PWM01[ArrayNumberPWM01].BytseOutFlag = 0;
-
-               OpenPulseFunction(ArrayNumberPWM01 - 1);
-               if(UsbTempBuffer[iTemp+1] == 'O')
-               {
-                 iTemp++;
-                 PWM01[ArrayNumberPWM01 - 1].PulseOoffsetFlag = 1;
-               }
-               while(( UsbTempBuffer[++iTemp] != ' ')&&(iTemp < UsbTemp)&&((UsbTempBuffer[iTemp]>='0')&&(UsbTempBuffer[iTemp]<='9')||(UsbTempBuffer[iTemp] == '-')||(UsbTempBuffer[iTemp] == '+')))
-               {
-                 DataTemp[DataTempCounter] = UsbTempBuffer[iTemp] ;
-                 DataTempCounter++;
-               }
-               if(PWM01[ArrayNumberPWM01 - 1].PulseOoffsetFlag)
-               {
-                 PWMspeed[ArrayNumberPWM01 - 1] = my_atoi(DataTemp,DataTempCounter);
-                 PWMspeed[ArrayNumberPWM01 - 1] = JudgeNumericalRange(PWMspeed[ArrayNumberPWM01 - 1],100,-100);
-               }
-               else
-               {
-                 PWMspeed[ArrayNumberPWM01 - 1] = my_atoi(DataTemp,DataTempCounter);
-                 PWMspeed[ArrayNumberPWM01 - 1] = JudgeNumericalRange(PWMspeed[ArrayNumberPWM01 - 1],2500,500);
-                 PWMspeed[ArrayNumberPWM01 - 1] = PWMspeed[ArrayNumberPWM01 - 1] - 500;
-               }
-               DataTempCounter = 0;
-               i = iTemp;
-            break;
-            case 'S':
-               iTemp = i;
-               while(( UsbTempBuffer[++iTemp] != ' ')&&(iTemp < UsbTemp)&&(UsbTempBuffer[iTemp]>='0')&&(UsbTempBuffer[iTemp]<='9'))
-               {
-                 DataTemp[DataTempCounter] = UsbTempBuffer[iTemp] ;
-                 DataTempCounter++;
-               }
-               PWM01[ArrayNumberPWM01 - 1].SpeedFlag = 1;
-               PWM01[ArrayNumberPWM01 - 1].speed = my_atoi(DataTemp,DataTempCounter);//atoi
-               PWM01[ArrayNumberPWM01 - 1].speed = JudgeNumericalRange(PWM01[ArrayNumberPWM01 - 1].speed,5000,1);//
-               DataTempCounter = 0;
-               i = iTemp;
-            break;
-            case 'T':
-               iTemp = i;
-               while(( UsbTempBuffer[++iTemp] != ' ')&&(iTemp < UsbTemp)&&(UsbTempBuffer[iTemp]>='0')&&(UsbTempBuffer[iTemp]<='9'))
-               {
-                 DataTemp[DataTempCounter] = UsbTempBuffer[iTemp] ;
-                 DataTempCounter++;
-               }
-               PWM01[ArrayNumberPWM01 - 1].TimerFlag = 1;
-               PWM01[ArrayNumberPWM01 - 1].timer = my_atoi(DataTemp,DataTempCounter);//atoi
-               PWM01[ArrayNumberPWM01 - 1].timer = JudgeNumericalRange(PWM01[ArrayNumberPWM01 - 1].timer,65535,1);//
-               for(j = 0;j<24;j++)
-               {
-                 PWM01[j].timer     = PWM01[ArrayNumberPWM01 - 1].timer;
-                 PWM01[j].TimerFlag = PWM01[ArrayNumberPWM01 - 1].TimerFlag;
-                 PWM01[j].SpeedFlag = 0;
-               }
-               DataTempCounter = 0;
-               i = iTemp;
-            break; 
-            case 'H'://
-               iTemp = i;
-               PWM01[ArrayNumberPWM01 - 1].DigitalOutFlag = 1;//
-               PWM01[ArrayNumberPWM01 - 1].DigitalOutStatus = 1;//
-               i = ++iTemp;
-            break;//
-            case 'L'://
-               iTemp = i;
-               PWM01[ArrayNumberPWM01 - 1].DigitalOutFlag = 1;//
-               PWM01[ArrayNumberPWM01 - 1].DigitalOutStatus = 0;//
-               i = ++iTemp;
-            break;
-            case ':'://
-               iTemp = i;
-               //
-               while(( UsbTempBuffer[++iTemp] != ' ')&&(iTemp < UsbTemp)&&(UsbTempBuffer[iTemp]>='0')&&(UsbTempBuffer[iTemp]<='9'))
-               {
-                 DataTemp[DataTempCounter] = UsbTempBuffer[iTemp] ;
-                 DataTempCounter++;
-               }
-               PWM01[ArrayNumberPWM01].BytseOutrRegister = my_atoi(DataTemp,DataTempCounter);//
-               switch(ArrayNumberPWM01) 
-               {
-                 case 1://
-                   if(PWM01[ArrayNumberPWM01].BytseOutrRegister>=0 && PWM01[ArrayNumberPWM01].BytseOutrRegister<=255)
-                   {
-                     PWM01[ArrayNumberPWM01].BytseOutFlag = 1;
-                     GpioRcSetReg = 0;
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0001) *PWM_001 = 1;//_H; 
-                     else                    *PWM_001 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0002) *PWM_002 = 1;//_L;
-                     else                    *PWM_002 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0004) *PWM_003 = 1;//_L;
-                     else                    *PWM_003 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0008) *PWM_004 = 1;//_L;
-                     else                    *PWM_004 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0010) *PWM_005 = 1;//_L;
-                     else                    *PWM_005 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0020) *PWM_006 = 1;//_L;
-                     else                    *PWM_006 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0040) *PWM_007 = 1;//_L;
-                     else                    *PWM_007 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0080) *PWM_008 = 1;//_L;	
-                     else                    *PWM_008 = 0;//PWM1_H; 
-                   }
-                   else
-                   {
-                     PWM01[ArrayNumberPWM01 - 1].DigitalOutFlag = 0;
-                     PWM01[ArrayNumberPWM01].BytseOutFlag = 0;
-                     *PWM_001 = 0;//PWM1_H; 
-                     *PWM_002 = 0;//PWM1_H; 
-                     *PWM_003 = 0;//PWM1_H; 
-                     *PWM_004 = 0;//PWM1_H; 
-                     *PWM_005 = 0;//PWM1_H; 
-                     *PWM_006 = 0;//PWM1_H; 
-                     *PWM_007 = 0;//PWM1_H; 
-                     *PWM_008 = 0;//PWM1_H; 
-                   }
-                 break;
-                 case 2://
-                   if(PWM01[ArrayNumberPWM01].BytseOutrRegister>=0 && PWM01[ArrayNumberPWM01].BytseOutrRegister<=255)
-                   {
-                     PWM01[ArrayNumberPWM01].BytseOutFlag = 1;
-                     GpioRcSetReg1 = 0;
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0001) *PWM_009 = 1;//PWM1_H; 
-                     else                    *PWM_009 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0002) *PWM_010 = 1;//PWM2_L;
-                     else                    *PWM_010 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0004) *PWM_011 = 1;//PWM3_L;
-                     else                    *PWM_011 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0008) *PWM_012 = 1;//PWM4_L;
-                     else                    *PWM_012 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0010) *PWM_013 = 1;//PWM5_L;
-                     else                    *PWM_013 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0020) *PWM_014 = 1;//PWM6_L;
-                     else                    *PWM_014 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0040) *PWM_015 = 1;//PWM7_L;
-                     else                    *PWM_015 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0080) *PWM_016 = 1;//PWM8_L;	
-                     else                    *PWM_016 = 0;//PWM1_H; 
-                   }
-                   else
-                   {
-                     PWM01[ArrayNumberPWM01 - 1].DigitalOutFlag = 0;
-                     PWM01[ArrayNumberPWM01].BytseOutFlag = 0;
-                     *PWM_009 = 0;//PWM1_H; 
-                     *PWM_010 = 0;//PWM1_H; 
-                     *PWM_011 = 0;//PWM1_H; 
-                     *PWM_012 = 0;//PWM1_H; 
-                     *PWM_013 = 0;//PWM1_H; 
-                     *PWM_014 = 0;//PWM1_H; 
-                     *PWM_015 = 0;//PWM1_H; 
-                     *PWM_016 = 0;//PWM1_H; 
-                   }
-                 break;
-                 case 3://
-                   if(PWM01[ArrayNumberPWM01].BytseOutrRegister>=0 && PWM01[ArrayNumberPWM01].BytseOutrRegister<=255)
-                   {
-                     PWM01[ArrayNumberPWM01].BytseOutFlag = 1;
-                     GpioRcSetReg2 = 0;
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0001) *PWM_017 = 1;//PWM1_H; 
-                     else                    *PWM_017 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0002) *PWM_018 = 1;//PWM2_L;
-                     else                    *PWM_018 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0004) *PWM_019 = 1;//PWM3_L;
-                     else                    *PWM_019 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0008) *PWM_020 = 1;//PWM4_L;
-                     else                    *PWM_020 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0010) *PWM_021 = 1;//PWM5_L;
-                     else                    *PWM_021 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0020) *PWM_022 = 1;//PWM6_L;
-                     else                    *PWM_022 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0040) *PWM_023 = 1;//PWM7_L;
-                     else                    *PWM_023 = 0;//PWM1_H; 
-                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0080) *PWM_024 = 1;//PWM8_L;	
-                     else                    *PWM_024 = 0;//PWM1_H; 
-                   }
-                   else
-                   {
-                     PWM01[ArrayNumberPWM01 - 1].DigitalOutFlag = 0;
-                     PWM01[ArrayNumberPWM01].BytseOutFlag = 0;
-                     *PWM_017 = 0;//_H; 
-                     *PWM_018 = 0;//_H; 
-                     *PWM_019 = 0;//_H; 
-                     *PWM_020 = 0;//_H; 
-                     *PWM_021 = 0;//_H; 
-                     *PWM_022 = 0;//_H; 
-                     *PWM_023 = 0;//_H; 
-                     *PWM_024 = 0;//_H; 
-                   }
-                 break;
-                 default:
-                 break;
-               }
-               i = iTemp;
-            break;
-            case 'Q'://
-               iTemp = i;     
-               if(UsbTempBuffer[++iTemp] == 'P' && iTemp < UsbTemp)
-               {
-                 while(( UsbTempBuffer[++iTemp] != ' ')&&(iTemp < UsbTemp)&&(UsbTempBuffer[iTemp]>='0')&&(UsbTempBuffer[iTemp]<='9'))
+              case 'V':
+                 iTemp = i;
+                 if(UsbTempBuffer[++iTemp] == 'E' && UsbTempBuffer[++iTemp] == 'R')
                  {
-                   DataTemp[DataTempCounter] = UsbTempBuffer[iTemp] ;//
-                   DataTempCounter++;
-                 }
-                 ArrayNumberPWM01 = my_atoi(DataTemp,DataTempCounter);//
-                 ArrayNumberPWM01 = (U8)JudgeNumericalRange(ArrayNumberPWM01,24,1);//
-                 DataTempCounter = 0;
-                 SportsStatusFlag = 1;
-                 //
-                 UartTxData(TxTypeTemp1,2);//
-               }
-               else
-               {             
-                 for( j= 0;j<24;j++ )
-                 {
-                   if(PWM01[j].angle != PWM01[j].buff)
-                   {// 
-                     SportsStatusFlag = 1;
-                   }
-                 }
-                 if(SportsStatusFlag)
-                 {//'.'
-                   UartTxData(TxTypeTemp1,3);//
+                   UartTxData(TxTypeTemp1,1);//
                  }
                  else
-                 {//'.'
-                   UartTxData(TxTypeTemp1,4);//
+                 {
+                   return;
                  }
-               }
-               i = ++iTemp;
-            break;
-            default:
-              if(i == 0)
-              {
-                SportsStatusFlag = 1;
-              }
-              i++;
-            break;
-          } 
+                 i = iTemp;
+              break;
+              case '#':
+                 iTemp = i;
+                 while(( UsbTempBuffer[++iTemp] != ' ')&&(iTemp < UsbTemp)&&(UsbTempBuffer[iTemp]>='0')&&(UsbTempBuffer[iTemp]<='9'))
+                 {
+                   DataTemp[DataTempCounter] = UsbTempBuffer[iTemp] ;
+                   DataTempCounter++;
+                 }
+                 ArrayNumberPWM01 = my_atoi(DataTemp,DataTempCounter);
+                 ArrayNumberPWM01 = ArrayNumberPWM01 + 1;
+                 if(( ArrayNumberPWM01 > 24)||( ArrayNumberPWM01 < 1 ))
+                 {
+                   DataTempCounter = 0;
+                   i = iTemp;
+                   return;
+                 }  
+                 DataTempCounter = 0;
+                 i = iTemp;
+              break;
+              case 'P':
+                 iTemp = i;
+
+                 PWM01[ArrayNumberPWM01 - 1].DigitalOutFlag = 0;//
+                 PWM01[ArrayNumberPWM01].BytseOutFlag = 0;
+
+                 OpenPulseFunction(ArrayNumberPWM01 - 1);
+                 if(UsbTempBuffer[iTemp+1] == 'O')
+                 {
+                   iTemp++;
+                   PWM01[ArrayNumberPWM01 - 1].PulseOoffsetFlag = 1;
+                 }
+                 while(( UsbTempBuffer[++iTemp] != ' ')&&(iTemp < UsbTemp)&&((UsbTempBuffer[iTemp]>='0')&&(UsbTempBuffer[iTemp]<='9')||(UsbTempBuffer[iTemp] == '-')||(UsbTempBuffer[iTemp] == '+')))
+                 {
+                   DataTemp[DataTempCounter] = UsbTempBuffer[iTemp] ;
+                   DataTempCounter++;
+                 }
+                 if(PWM01[ArrayNumberPWM01 - 1].PulseOoffsetFlag)
+                 {
+                   PWMspeed[ArrayNumberPWM01 - 1] = my_atoi(DataTemp,DataTempCounter);
+                   PWMspeed[ArrayNumberPWM01 - 1] = JudgeNumericalRange(PWMspeed[ArrayNumberPWM01 - 1],100,-100);
+                 }
+                 else
+                 {
+                   PWMspeed[ArrayNumberPWM01 - 1] = my_atoi(DataTemp,DataTempCounter);
+                   PWMspeed[ArrayNumberPWM01 - 1] = JudgeNumericalRange(PWMspeed[ArrayNumberPWM01 - 1],2500,500);
+                   PWMspeed[ArrayNumberPWM01 - 1] = PWMspeed[ArrayNumberPWM01 - 1] - 500;
+                 }
+                 DataTempCounter = 0;
+                 i = iTemp;
+              break;
+              case 'S':
+                 iTemp = i;
+                 while(( UsbTempBuffer[++iTemp] != ' ')&&(iTemp < UsbTemp)&&(UsbTempBuffer[iTemp]>='0')&&(UsbTempBuffer[iTemp]<='9'))
+                 {
+                   DataTemp[DataTempCounter] = UsbTempBuffer[iTemp] ;
+                   DataTempCounter++;
+                 }
+                 PWM01[ArrayNumberPWM01 - 1].SpeedFlag = 1;
+                 PWM01[ArrayNumberPWM01 - 1].speed = my_atoi(DataTemp,DataTempCounter);//atoi
+                 PWM01[ArrayNumberPWM01 - 1].speed = JudgeNumericalRange(PWM01[ArrayNumberPWM01 - 1].speed,5000,1);//
+                 DataTempCounter = 0;
+                 i = iTemp;
+              break;
+              case 'T':
+                 iTemp = i;
+                 while(( UsbTempBuffer[++iTemp] != ' ')&&(iTemp < UsbTemp)&&(UsbTempBuffer[iTemp]>='0')&&(UsbTempBuffer[iTemp]<='9'))
+                 {
+                   DataTemp[DataTempCounter] = UsbTempBuffer[iTemp] ;
+                   DataTempCounter++;
+                 }
+                 PWM01[ArrayNumberPWM01 - 1].TimerFlag = 1;
+                 PWM01[ArrayNumberPWM01 - 1].timer = my_atoi(DataTemp,DataTempCounter);//atoi
+                 PWM01[ArrayNumberPWM01 - 1].timer = JudgeNumericalRange(PWM01[ArrayNumberPWM01 - 1].timer,65535,1);//
+                 for(j = 0;j<24;j++)
+                 {
+                   PWM01[j].timer     = PWM01[ArrayNumberPWM01 - 1].timer;
+                   PWM01[j].TimerFlag = PWM01[ArrayNumberPWM01 - 1].TimerFlag;
+                   PWM01[j].SpeedFlag = 0;
+                 }
+                 DataTempCounter = 0;
+                 i = iTemp;
+              break; 
+              case 'H'://
+                 iTemp = i;
+                 PWM01[ArrayNumberPWM01 - 1].DigitalOutFlag = 1;//
+                 PWM01[ArrayNumberPWM01 - 1].DigitalOutStatus = 1;//
+                 i = ++iTemp;
+              break;//
+              case 'L'://
+                 iTemp = i;
+                 PWM01[ArrayNumberPWM01 - 1].DigitalOutFlag = 1;//
+                 PWM01[ArrayNumberPWM01 - 1].DigitalOutStatus = 0;//
+                 i = ++iTemp;
+              break;
+              case ':'://
+                 iTemp = i;
+                 //
+                 while(( UsbTempBuffer[++iTemp] != ' ')&&(iTemp < UsbTemp)&&(UsbTempBuffer[iTemp]>='0')&&(UsbTempBuffer[iTemp]<='9'))
+                 {
+                   DataTemp[DataTempCounter] = UsbTempBuffer[iTemp] ;
+                   DataTempCounter++;
+                 }
+                 PWM01[ArrayNumberPWM01].BytseOutrRegister = my_atoi(DataTemp,DataTempCounter);//
+                 switch(ArrayNumberPWM01) 
+                 {
+                   case 1://
+                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister>=0 && PWM01[ArrayNumberPWM01].BytseOutrRegister<=255)
+                     {
+                       PWM01[ArrayNumberPWM01].BytseOutFlag = 1;
+                       GpioRcSetReg = 0;
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0001) *PWM_001 = 1;//_H; 
+                       else                    *PWM_001 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0002) *PWM_002 = 1;//_L;
+                       else                    *PWM_002 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0004) *PWM_003 = 1;//_L;
+                       else                    *PWM_003 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0008) *PWM_004 = 1;//_L;
+                       else                    *PWM_004 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0010) *PWM_005 = 1;//_L;
+                       else                    *PWM_005 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0020) *PWM_006 = 1;//_L;
+                       else                    *PWM_006 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0040) *PWM_007 = 1;//_L;
+                       else                    *PWM_007 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0080) *PWM_008 = 1;//_L;	
+                       else                    *PWM_008 = 0;//PWM1_H; 
+                     }
+                     else
+                     {
+                       PWM01[ArrayNumberPWM01 - 1].DigitalOutFlag = 0;
+                       PWM01[ArrayNumberPWM01].BytseOutFlag = 0;
+                       *PWM_001 = 0;//PWM1_H; 
+                       *PWM_002 = 0;//PWM1_H; 
+                       *PWM_003 = 0;//PWM1_H; 
+                       *PWM_004 = 0;//PWM1_H; 
+                       *PWM_005 = 0;//PWM1_H; 
+                       *PWM_006 = 0;//PWM1_H; 
+                       *PWM_007 = 0;//PWM1_H; 
+                       *PWM_008 = 0;//PWM1_H; 
+                     }
+                   break;
+                   case 2://
+                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister>=0 && PWM01[ArrayNumberPWM01].BytseOutrRegister<=255)
+                     {
+                       PWM01[ArrayNumberPWM01].BytseOutFlag = 1;
+                       GpioRcSetReg1 = 0;
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0001) *PWM_009 = 1;//PWM1_H; 
+                       else                    *PWM_009 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0002) *PWM_010 = 1;//PWM2_L;
+                       else                    *PWM_010 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0004) *PWM_011 = 1;//PWM3_L;
+                       else                    *PWM_011 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0008) *PWM_012 = 1;//PWM4_L;
+                       else                    *PWM_012 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0010) *PWM_013 = 1;//PWM5_L;
+                       else                    *PWM_013 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0020) *PWM_014 = 1;//PWM6_L;
+                       else                    *PWM_014 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0040) *PWM_015 = 1;//PWM7_L;
+                       else                    *PWM_015 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0080) *PWM_016 = 1;//PWM8_L;	
+                       else                    *PWM_016 = 0;//PWM1_H; 
+                     }
+                     else
+                     {
+                       PWM01[ArrayNumberPWM01 - 1].DigitalOutFlag = 0;
+                       PWM01[ArrayNumberPWM01].BytseOutFlag = 0;
+                       *PWM_009 = 0;//PWM1_H; 
+                       *PWM_010 = 0;//PWM1_H; 
+                       *PWM_011 = 0;//PWM1_H; 
+                       *PWM_012 = 0;//PWM1_H; 
+                       *PWM_013 = 0;//PWM1_H; 
+                       *PWM_014 = 0;//PWM1_H; 
+                       *PWM_015 = 0;//PWM1_H; 
+                       *PWM_016 = 0;//PWM1_H; 
+                     }
+                   break;
+                   case 3://
+                     if(PWM01[ArrayNumberPWM01].BytseOutrRegister>=0 && PWM01[ArrayNumberPWM01].BytseOutrRegister<=255)
+                     {
+                       PWM01[ArrayNumberPWM01].BytseOutFlag = 1;
+                       GpioRcSetReg2 = 0;
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0001) *PWM_017 = 1;//PWM1_H; 
+                       else                    *PWM_017 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0002) *PWM_018 = 1;//PWM2_L;
+                       else                    *PWM_018 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0004) *PWM_019 = 1;//PWM3_L;
+                       else                    *PWM_019 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0008) *PWM_020 = 1;//PWM4_L;
+                       else                    *PWM_020 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0010) *PWM_021 = 1;//PWM5_L;
+                       else                    *PWM_021 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0020) *PWM_022 = 1;//PWM6_L;
+                       else                    *PWM_022 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0040) *PWM_023 = 1;//PWM7_L;
+                       else                    *PWM_023 = 0;//PWM1_H; 
+                       if(PWM01[ArrayNumberPWM01].BytseOutrRegister & 0x0080) *PWM_024 = 1;//PWM8_L;	
+                       else                    *PWM_024 = 0;//PWM1_H; 
+                     }
+                     else
+                     {
+                       PWM01[ArrayNumberPWM01 - 1].DigitalOutFlag = 0;
+                       PWM01[ArrayNumberPWM01].BytseOutFlag = 0;
+                       *PWM_017 = 0;//_H; 
+                       *PWM_018 = 0;//_H; 
+                       *PWM_019 = 0;//_H; 
+                       *PWM_020 = 0;//_H; 
+                       *PWM_021 = 0;//_H; 
+                       *PWM_022 = 0;//_H; 
+                       *PWM_023 = 0;//_H; 
+                       *PWM_024 = 0;//_H; 
+                     }
+                   break;
+                   default:
+                   break;
+                 }
+                 i = iTemp;
+              break;
+              case 'Q'://
+                 iTemp = i;     
+                 if(UsbTempBuffer[++iTemp] == 'P' && iTemp < UsbTemp)
+                 {
+                   while(( UsbTempBuffer[++iTemp] != ' ')&&(iTemp < UsbTemp)&&(UsbTempBuffer[iTemp]>='0')&&(UsbTempBuffer[iTemp]<='9'))
+                   {
+                     DataTemp[DataTempCounter] = UsbTempBuffer[iTemp] ;//
+                     DataTempCounter++;
+                   }
+                   ArrayNumberPWM01 = my_atoi(DataTemp,DataTempCounter);//
+                   ArrayNumberPWM01 = (U8)JudgeNumericalRange(ArrayNumberPWM01,24,1);//
+                   DataTempCounter = 0;
+                   SportsStatusFlag = 1;
+                   //
+                   UartTxData(TxTypeTemp1,2);//
+                 }
+                 else
+                 {             
+                   for( j= 0;j<24;j++ )
+                   {
+                     if(PWM01[j].angle != PWM01[j].buff)
+                     {// 
+                       SportsStatusFlag = 1;
+                     }
+                   }
+                   if(SportsStatusFlag)
+                   {//'.'
+                     UartTxData(TxTypeTemp1,3);//
+                   }
+                   else
+                   {//'.'
+                     UartTxData(TxTypeTemp1,4);//
+                   }
+                 }
+                 i = ++iTemp;
+              break;
+              default:
+                if(i == 0)
+                {
+                  SportsStatusFlag = 1;
+                }
+                i++;
+              break;
+            } 
+          }
         }
         if(SportsStatusFlag==0)//
           Sys_PWMDataAccount();//
@@ -951,6 +1019,7 @@ void usbrxbuf(void)
     }
     digitalWrite(BOARD_LED_PIN, LOW);
     UsbTemp = UsbTemp + i; 
+    
     if((UsbTempBuffer[UsbTemp-1] != 13))
     {
       if( UsbTemp < 390 )
