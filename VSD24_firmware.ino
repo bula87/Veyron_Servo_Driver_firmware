@@ -105,7 +105,13 @@ U16 EepromServoRunTimes = 0;
 U8 DIStateBps;        
 U8 DIStateBpsApp;      
 U2 On1Off0LineFlag = 0;
-U2 binaryModeStarted = 0;
+
+U2 binaryMODE = 0;
+U16 tmp2bytes = 0;
+U2 servoCmd = 0; // (# and P) 0 - not started; 1..3 - length of mandatory bytes of command
+U2 speedCmd = 0; // (A0) 0 - not started; 1..3 - length of mandatory bytes of command
+U2 timeCmd = 0; // (A0) 0 - not started; 1..3 - length of mandatory bytes of command
+#define CMD_END_BYTE 0x0D
 
 U2 USbRxFLAG   = 0;
 U2 UARt1RxFLAG = 0;
@@ -483,70 +489,6 @@ void ParseRxData(void)
 
         while(UsbTemp > i)
         {
-/* 
-* 0x80 - 0x98: this is a range after "printable" ASCII code
-* we will use it for binary mode because in "terminal mode" we will use characters up to number 126 on ASCII table 
-* our 0x80 (ASCII 128) and 0x98 (ASCII 128+24) will be enought to determinate servo port number
-*/
-          if(UsbTempBuffer[i] >= 0x80 && UsbTempBuffer[i] <= 0xA2) // Binary mode
-          {
-            iTemp = i;
-            U16 tmp2bytes = 0;
-            if(binaryModeStarted == 0) // read servo pin number (#) and servo move angle (P) 
-            { 
-              if ( (UsbTempBuffer[iTemp]^0x80)+1 > 0 && (UsbTempBuffer[iTemp]^0x80)+1 < 25)
-              {
-                ArrayNumberPWM01 = (UsbTempBuffer[iTemp]^0x80)+1;
-                binaryModeStarted = 1;
-                
-                for(j=0;j<2;j++)
-                {
-                  ++iTemp;
-                  tmp2bytes <<= 8;
-                  tmp2bytes |= UsbTempBuffer[iTemp];
-                }
-                PWMspeed[ArrayNumberPWM01 - 1] = JudgeNumericalRange(tmp2bytes,2500,500);
-                PWMspeed[ArrayNumberPWM01 - 1] = PWMspeed[ArrayNumberPWM01 - 1] - 500;
-              }
-            }
-            ++iTemp;
-            switch(UsbTempBuffer[iTemp])
-            {
-              case 0xA0: // read optional speed command for servo (S)
-                for(j=0;j<2;j++)
-                {
-                  ++iTemp;
-                  tmp2bytes <<= 8;
-                  tmp2bytes |= UsbTempBuffer[iTemp];
-                }
-                PWM01[ArrayNumberPWM01 - 1].SpeedFlag = 1;
-                PWM01[ArrayNumberPWM01 - 1].speed = JudgeNumericalRange(tmp2bytes,5000,1);//
-                break;
-              case 0xA1: // read group move time for servos (T)
-                for(j=0;j<2;j++)
-                {
-                  ++iTemp;
-                  tmp2bytes <<= 8;
-                  tmp2bytes |= UsbTempBuffer[iTemp];
-                }
-                PWM01[ArrayNumberPWM01 - 1].TimerFlag = 1;
-                PWM01[ArrayNumberPWM01 - 1].timer = JudgeNumericalRange(tmp2bytes,65535,1);//
-                for(j = 0;j<24;j++)
-                {
-                  PWM01[j].timer     = PWM01[ArrayNumberPWM01 - 1].timer;
-                  PWM01[j].TimerFlag = PWM01[ArrayNumberPWM01 - 1].TimerFlag;
-                  PWM01[j].SpeedFlag = 0;
-                }
-                break;
-              case 0xA2: // Cancel all commands (TODO)
-                break;
-              default:
-                binaryModeStarted = 0;
-                break;
-            }
-            i = iTemp;
-          }
-          else // Terminal mode
           {
             binaryModeStarted = 0;
             switch(UsbTempBuffer[i]) 
@@ -992,9 +934,98 @@ void LineOn1Off0(void)
   }
 }
 
+
+/* 
+* 0x80 - 0x98: this is a range after "printable" ASCII code
+* we will use it for binary mode because in "terminal mode" we will use characters up to number 126 on ASCII table 
+* our 0x80 (ASCII 128) and 0x98 (ASCII 128+24) will be enought to determinate servo port number
+*/
+
+U2 checkBinData()
+{
+  if(servoCmd == 0 && speedCmd == 0 && timeCmd == 0 && UsbTempBuffer[UsbTemp+i] == CMD_END_BYTE)
+  {
+    return 0;
+  }
+  if(servoCmd != 0 || (UsbTempBuffer[UsbTemp+i] >= 0x80 && UsbTempBuffer[UsbTemp+i] <= 0x98 && speedCmd == 0 && timeCmd == 0))
+  {
+    if (servoCmd == 0 && (UsbTempBuffer[UsbTemp+i]^0x80)+1 > 0 && (UsbTempBuffer[UsbTemp+i]^0x80)+1 < 25)
+    {
+      tmp2bytes = 0;
+      ArrayNumberPWM01 = (UsbTempBuffer[UsbTemp+i]^0x80)+1;
+      ++servoCmd;
+    }
+    else
+    {
+      tmp2bytes <<= 8;
+      tmp2bytes |= UsbTempBuffer[UsbTemp+i];
+      ++servoCmd;
+    }
+    if(servoCmd == 3)
+    {
+      servoCmd = 0;
+      PWMspeed[ArrayNumberPWM01 - 1] = JudgeNumericalRange(tmp2bytes,2500,500);
+      PWMspeed[ArrayNumberPWM01 - 1] = PWMspeed[ArrayNumberPWM01 - 1] - 500;
+      tmp2bytes = 0;
+    }
+  }
+  else
+  if(speedCmd != 0 || (UsbTempBuffer[UsbTemp+i] == 0xA0 && servoCmd == 0 && timeCmd == 0))
+  {
+    if(speedCmd == 0 && UsbTempBuffer[UsbTemp+i]== 0xA0)
+    {
+      tmp2bytes = 0;
+      ++speedCmd;
+    }
+    else
+    {
+      tmp2bytes <<= 8;
+      tmp2bytes |= UsbTempBuffer[UsbTemp+i];
+      ++speedCmd;
+    }
+    if(speedCmd == 3)
+    {
+      speedCmd = 0;
+      PWM01[ArrayNumberPWM01 - 1].SpeedFlag = 1;
+      PWM01[ArrayNumberPWM01 - 1].speed = JudgeNumericalRange(tmp2bytes,5000,1);//
+      tmp2bytes = 0;
+    }
+  }
+  else
+  if(timeCmd != 0 || (UsbTempBuffer[UsbTemp+i] == 0xA1 && servoCmd == 0 && speedCmd == 0))
+  {
+    if(timeCmd == 0 && UsbTempBuffer[UsbTemp+i]== 0xA1)
+    {
+      tmp2bytes = 0;
+      ++timeCmd;
+    }
+    else
+    {
+      tmp2bytes <<= 8;
+      tmp2bytes |= UsbTempBuffer[UsbTemp+i];
+      ++timeCmd;
+    }
+    if(timeCmd == 3)
+    {
+      timeCmd = 0;
+      PWM01[ArrayNumberPWM01 - 1].TimerFlag = 1;
+      PWM01[ArrayNumberPWM01 - 1].timer = JudgeNumericalRange(tmp2bytes,65535,1);//
+      for(j = 0;j<24;j++)
+      {
+        PWM01[j].timer     = PWM01[ArrayNumberPWM01 - 1].timer;
+        PWM01[j].TimerFlag = PWM01[ArrayNumberPWM01 - 1].TimerFlag;
+        PWM01[j].SpeedFlag = 0;
+      }
+      tmp2bytes = 0;
+    }
+  }
+  return 1;
+}
+
 void usbrxbuf(void)
 { 
   U16 i = 0;
+  U2 check = 0;
   int newbytes;
   if(UARt1RxFLAG == 0 && UARt2RxFLAG == 0)
   {
@@ -1013,14 +1044,19 @@ void usbrxbuf(void)
     while((SerialUSB.available())&&( UsbTemp+i < 390 ))
     {
       UsbTempBuffer[UsbTemp+i] = SerialUSB.read();
+      if(binaryMODE = 1)      
+        check = checkBinaryMode();
       i++;
       delayMicroseconds(100); 
       led_kongzhi();
     }
     digitalWrite(BOARD_LED_PIN, LOW);
-    UsbTemp = UsbTemp + i; 
-    
-    if((UsbTempBuffer[UsbTemp-1] != 13))
+    UsbTemp = UsbTemp + i;
+   
+    if(binaryMODE = 0)
+      check = (UsbTempBuffer[UsbTemp-1] != 13);   
+  
+    if(check)
     {
       if( UsbTemp < 390 )
       {
@@ -1038,6 +1074,7 @@ void usbrxbuf(void)
     USbRxFLAG = 1; 
   } 
 }
+
 
 void uart1rxbuf(void)
 { 
